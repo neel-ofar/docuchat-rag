@@ -1,0 +1,29 @@
+flask==3.0.0
+flask-cors==4.0.0
+python-dotenv==1.0.0
+werkzeug==3.0.1
+
+# LangChain and text processing
+langchain==0.1.0
+langchain-community==0.0.10
+langchain-text-splitters==0.0.1
+
+# Embeddings and models (without torch dependency issues)
+sentence-transformers==2.3.1
+huggingface-hub==0.20.0
+
+# Vector store
+faiss-cpu==1.7.4
+
+# Document processing
+PyPDF2==3.0.1
+python-docx==1.1.0
+
+# Use CPU-only torch to avoid DLL issues on Windows
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.0+cpu
+torchaudio==2.1.0+cpu
+torchvision==0.16.0+cpu
+
+# Production server
+gunicorn==21.2.0
