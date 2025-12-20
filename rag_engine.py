@@ -46,12 +46,12 @@ class RAGEngine:
             self.client = InferenceClient(token=hf_token) if hf_token else None
             
             # Use a good open-source model (can be changed)
-            self.llm_model = "HuggingFaceH4/zephyr-7b-beta"
+            self.llm_model = "meta-llama/Llama-2-7b-chat-hf"
             
             # Initialize text splitter
             self.text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=500,
-                chunk_overlap=50,
+                chunk_size=1000,
+                chunk_overlap=100,
                 length_function=len,
             )
             
@@ -167,7 +167,7 @@ class RAGEngine:
             print(f"🔍 Querying: {question}")
             
             # Retrieve relevant documents
-            docs = self.vectorstore.similarity_search(question, k=3)
+            docs = self.vectorstore.similarity_search(question, k=5)
             
             if not docs:
                 return "No relevant information found in the uploaded documents.", []
@@ -192,15 +192,18 @@ class RAGEngine:
             if self.client:
                 try:
                     print("🤖 Generating answer with LLM...")
-                    response = self.client.text_generation(
-                        prompt,
+                    response = self.client.chat_completion(
                         model=self.llm_model,
+                        messages=[
+                            {"role": "system", "content": "You are a helpful AI assistant."},
+                            {"role": "user", "content": prompt}
+                        ],
                         max_new_tokens=512,
                         temperature=0.7,
                         top_p=0.95,
                         return_full_text=False
                     )
-                    answer = response.strip()
+                    answer = response.choices[0].message.content.strip()
                     print("✅ LLM answer generated!")
                 except Exception as e:
                     print(f"⚠️  LLM API error: {e}")
