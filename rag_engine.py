@@ -198,7 +198,7 @@ class RAGEngine:
                             {"role": "system", "content": "You are a helpful AI assistant."},
                             {"role": "user", "content": prompt}
                         ],
-                        max_new_tokens=512,
+                        max_tokens=512,
                         temperature=0.7,
                         top_p=0.95,
                         return_full_text=False
