@@ -201,7 +201,6 @@ class RAGEngine:
                         max_tokens=512,
                         temperature=0.7,
                         top_p=0.95,
-                        return_full_text=False
                     )
                     answer = response.choices[0].message.content.strip()
                     print("✅ LLM answer generated!")
