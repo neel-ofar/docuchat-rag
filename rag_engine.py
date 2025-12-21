@@ -46,7 +46,7 @@ class RAGEngine:
             self.client = InferenceClient(token=hf_token) if hf_token else None
             
             # Use a good open-source model (can be changed)
-            self.llm_model = "meta-llama/Llama-2-7b-chat-hf"
+            self.llm_model = "HuggingFaceH4/zephyr-7b-beta"
             
             # Initialize text splitter
             self.text_splitter = RecursiveCharacterTextSplitter(
