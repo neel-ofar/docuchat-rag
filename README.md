@@ -4,7 +4,7 @@ An intelligent document assistant that uses **Retrieval-Augmented Generation (RA
 
 ## 🌐 Live Demo
 
-🔗 **[Try it live on Render](https://docuchat-rag.onrender.com/)** ← Update this with your URL!
+🔗 **[Try it live on Render](https://docuchat-rag.onrender.com/)** 
 
 ![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
 ![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)
