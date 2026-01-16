@@ -1,279 +1,345 @@
+"""
+RAG Engine for Google Docs Chatbot
+Implements chunking, embedding, retrieval, and generation
+"""
+
 import os
-from typing import List, Tuple
-import warnings
-warnings.filterwarnings('ignore')
-
-# Fixed imports for Windows
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-except ImportError:
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-import PyPDF2
-try:
-    import docx
-except ImportError:
-    import python_docx as docx
-
-from huggingface_hub import InferenceClient
+import re
+from typing import List, Dict, Tuple, Optional
+import chromadb
+from chromadb.config import Settings
+from sentence_transformers import SentenceTransformer
+from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class RAGEngine:
-    """RAG Engine using Hugging Face models"""
+    """Complete RAG pipeline for document Q&A"""
     
     def __init__(self):
         print("🔧 Initializing RAG Engine...")
         
-        try:
-            # Initialize embeddings model from Hugging Face
-            print("📥 Loading embedding model (this may take a minute)...")
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True}
-            )
-            print("✅ Embedding model loaded!")
-            
-            # Initialize Hugging Face Inference Client for LLM
-            hf_token = os.getenv('HUGGINGFACE_TOKEN', '')
-            if not hf_token:
-                print("⚠️  Warning: No Hugging Face token found. LLM features may be limited.")
-            
-            self.client = InferenceClient(token=hf_token) if hf_token else None
-            
-            # Use a good open-source model (can be changed)
-            self.llm_model = "HuggingFaceH4/zephyr-7b-beta"
-            
-            # Initialize text splitter
-            self.text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=100,
-                length_function=len,
-            )
-            
-            # Vector store
-            self.vectorstore = None
-            self.documents = []
-            self.document_metadata = []
-            
-            print("✅ RAG Engine initialized successfully!")
-            
-        except Exception as e:
-            print(f"❌ Error initializing RAG Engine: {e}")
-            raise
-    
-    def extract_text_from_file(self, filepath: str) -> str:
-        """Extract text from various file formats"""
-        ext = filepath.lower().split('.')[-1]
+        # Configuration
+        self.chunk_size = int(os.getenv('CHUNK_SIZE', 800))
+        self.chunk_overlap = int(os.getenv('CHUNK_OVERLAP', 100))
+        self.top_k = int(os.getenv('TOP_K_RESULTS', 3))
         
-        try:
-            if ext == 'txt':
-                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                    return f.read()
+        # Initialize embeddings
+        print("📥 Loading embedding model...")
+        embedding_model = os.getenv('EMBEDDING_MODEL', 'sentence-transformers/all-MiniLM-L6-v2')
+        self.embedder = SentenceTransformer(embedding_model)
+        print("✅ Embeddings ready!")
+        
+        # Initialize ChromaDB
+        print("🗄️  Setting up vector store...")
+        self.chroma_client = chromadb.Client(Settings(
+            anonymized_telemetry=False,
+            allow_reset=True
+        ))
+        self.collection = None
+        print("✅ Vector store ready!")
+        
+        # Initialize LLM (Groq)
+        groq_key = os.getenv('GROQ_API_KEY')
+        if groq_key:
+            self.llm_client = Groq(api_key=groq_key)
+            self.llm_model = os.getenv('LLM_MODEL', 'llama-3.1-8b-instant')
+            print("✅ LLM ready (Groq)!")
+        else:
+            self.llm_client = None
+            print("⚠️  No LLM API key found")
+        
+        # Storage
+        self.current_doc = None
+        self.conversation_history = []
+        
+        print("✅ RAG Engine initialized!\n")
+    
+    def chunk_text(self, text: str) -> List[Dict]:
+        """
+        Chunk text into semantic segments with metadata
+        Returns list of {text, chunk_id, section}
+        """
+        # Split by double newlines (paragraphs)
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+        
+        chunks = []
+        current_chunk = ""
+        chunk_id = 0
+        
+        # Detect sections (lines starting with numbers or all caps)
+        section_pattern = re.compile(r'^(\d+\.|\d+\)|\w+:|\b[A-Z\s]{5,}\b)')
+        current_section = "Introduction"
+        
+        for para in paragraphs:
+            # Check if this is a section header
+            if section_pattern.match(para) and len(para) < 100:
+                current_section = para
+                continue
             
-            elif ext == 'pdf':
-                text = ""
-                try:
-                    with open(filepath, 'rb') as f:
-                        pdf_reader = PyPDF2.PdfReader(f)
-                        for page in pdf_reader.pages:
-                            page_text = page.extract_text()
-                            if page_text:
-                                text += page_text + "\n"
-                except Exception as e:
-                    print(f"⚠️  PDF extraction error: {e}")
-                return text
-            
-            elif ext == 'docx':
-                try:
-                    doc = docx.Document(filepath)
-                    return "\n".join([paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip()])
-                except Exception as e:
-                    print(f"⚠️  DOCX extraction error: {e}")
-                    return ""
-            
+            # Add to current chunk
+            if len(current_chunk) + len(para) < self.chunk_size:
+                current_chunk += para + "\n\n"
             else:
-                return ""
+                # Save current chunk
+                if current_chunk.strip():
+                    chunks.append({
+                        'text': current_chunk.strip(),
+                        'chunk_id': chunk_id,
+                        'section': current_section
+                    })
+                    chunk_id += 1
+                
+                # Start new chunk with overlap
+                words = current_chunk.split()
+                overlap_words = words[-self.chunk_overlap:] if len(words) > self.chunk_overlap else words
+                current_chunk = ' '.join(overlap_words) + "\n\n" + para + "\n\n"
         
-        except Exception as e:
-            print(f"❌ Error extracting text: {e}")
-            return ""
+        # Add last chunk
+        if current_chunk.strip():
+            chunks.append({
+                'text': current_chunk.strip(),
+                'chunk_id': chunk_id,
+                'section': current_section
+            })
+        
+        return chunks
     
-    def add_document(self, filepath: str, filename: str) -> bool:
-        """Add a document to the RAG system"""
+    def ingest_document(self, content: str, title: str, doc_id: str) -> Dict:
+        """Ingest document into vector store"""
         try:
-            print(f"📄 Processing document: {filename}")
+            print(f"📄 Ingesting document: {title}")
             
-            # Extract text
-            text = self.extract_text_from_file(filepath)
-            if not text or len(text.strip()) == 0:
-                print("❌ No text extracted from document")
-                return False
-            
-            print(f"📝 Extracted {len(text)} characters")
-            
-            # Split text into chunks
-            chunks = self.text_splitter.split_text(text)
-            print(f"✂️  Split into {len(chunks)} chunks")
+            # Chunk document
+            chunks = self.chunk_text(content)
+            print(f"✂️  Created {len(chunks)} chunks")
             
             if len(chunks) == 0:
-                print("❌ No chunks created from document")
-                return False
+                return {'success': False, 'error': 'No chunks created from document'}
             
-            # Create metadata for each chunk
-            metadatas = [{'source': filename, 'chunk': i} for i in range(len(chunks))]
+            # Reset collection
+            try:
+                self.chroma_client.delete_collection('documents')
+            except:
+                pass
             
-            # Add to vector store
+            self.collection = self.chroma_client.create_collection(
+                name='documents',
+                metadata={'doc_id': doc_id, 'title': title}
+            )
+            
+            # Generate embeddings and store
             print("🔄 Creating embeddings...")
-            if self.vectorstore is None:
-                self.vectorstore = FAISS.from_texts(
-                    texts=chunks,
-                    embedding=self.embeddings,
-                    metadatas=metadatas
-                )
-            else:
-                self.vectorstore.add_texts(
-                    texts=chunks,
-                    metadatas=metadatas
-                )
+            texts = [chunk['text'] for chunk in chunks]
+            embeddings = self.embedder.encode(texts, show_progress_bar=False).tolist()
+            
+            # Add to ChromaDB
+            self.collection.add(
+                documents=texts,
+                embeddings=embeddings,
+                ids=[f"chunk_{i}" for i in range(len(chunks))],
+                metadatas=[{
+                    'chunk_id': chunk['chunk_id'],
+                    'section': chunk['section']
+                } for chunk in chunks]
+            )
             
             # Store document info
-            self.documents.append(text)
-            self.document_metadata.append({
-                'filename': filename,
+            self.current_doc = {
+                'title': title,
+                'doc_id': doc_id,
+                'content': content,
+                'chunks': chunks,
+                'total_chunks': len(chunks)
+            }
+            
+            # Clear conversation history
+            self.conversation_history = []
+            
+            print(f"✅ Document ingested successfully!\n")
+            
+            return {
+                'success': True,
                 'chunks': len(chunks),
-                'filepath': filepath
+                'title': title
+            }
+        
+        except Exception as e:
+            print(f"❌ Ingestion error: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def retrieve_context(self, query: str) -> List[Dict]:
+        """Retrieve relevant chunks for query"""
+        if not self.collection:
+            return []
+        
+        # Generate query embedding
+        query_embedding = self.embedder.encode([query], show_progress_bar=False).tolist()
+        
+        # Search
+        results = self.collection.query(
+            query_embeddings=query_embedding,
+            n_results=self.top_k
+        )
+        
+        # Format results
+        contexts = []
+        for i, doc in enumerate(results['documents'][0]):
+            metadata = results['metadatas'][0][i]
+            contexts.append({
+                'text': doc,
+                'section': metadata.get('section', 'Unknown'),
+                'chunk_id': metadata.get('chunk_id', i),
+                'distance': results['distances'][0][i] if 'distances' in results else 0
             })
-            
-            print(f"✅ Document added successfully!")
-            return True
         
-        except Exception as e:
-            print(f"❌ Error adding document: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+        return contexts
     
-    def query(self, question: str, history: List = None) -> Tuple[str, List[dict]]:
-        """Query the RAG system"""
-        try:
-            if self.vectorstore is None:
-                return "Please upload a document first before asking questions.", []
-            
-            print(f"🔍 Querying: {question}")
-            
-            # Retrieve relevant documents
-            docs = self.vectorstore.similarity_search(question, k=5)
-            
-            if not docs:
-                return "No relevant information found in the uploaded documents.", []
-            
-            # Prepare context from retrieved documents
-            context = "\n\n".join([doc.page_content for doc in docs])
-            
-            # Prepare sources
-            sources = []
-            for doc in docs:
-                sources.append({
-                    'source': doc.metadata.get('source', 'Unknown'),
-                    'chunk': doc.metadata.get('chunk', 0),
-                    'content': doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
-                })
-            
-            # Create prompt with context
-            prompt = self._create_prompt(question, context, history)
-            
-            # Generate answer using Hugging Face model
-            answer = None
-            if self.client:
-                try:
-                    print("🤖 Generating answer with LLM...")
-                    response = self.client.chat_completion(
-                        model=self.llm_model,
-                        messages=[
-                            {"role": "system", "content": "You are a helpful AI assistant."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        max_tokens=512,
-                        temperature=0.7,
-                        top_p=0.95,
-                    )
-                    answer = response.choices[0].message.content.strip()
-                    print("✅ LLM answer generated!")
-                except Exception as e:
-                    print(f"⚠️  LLM API error: {e}")
-                    answer = None
-            
-            # Fallback to extractive answer if LLM fails
-            if not answer:
-                print("📝 Using extractive answer...")
-                answer = self._extractive_answer(question, context)
-            
-            return answer, sources
+    def generate_answer(self, query: str, contexts: List[Dict]) -> Dict:
+        """Generate answer using LLM with citations"""
         
-        except Exception as e:
-            print(f"❌ Error during query: {e}")
-            import traceback
-            traceback.print_exc()
-            return f"Error processing query: {str(e)}", []
+        if not contexts:
+            return {
+                'answer': "I couldn't find relevant information in the document to answer your question. Could you rephrase or ask about a different topic?",
+                'sources': [],
+                'fallback': True
+            }
+        
+        # Build context string with section markers
+        context_text = ""
+        for ctx in contexts:
+            context_text += f"[Section: {ctx['section']}]\n{ctx['text']}\n\n"
+        
+        # Build conversation history
+        history_text = ""
+        if self.conversation_history:
+            recent_history = self.conversation_history[-5:]  # Last 5 exchanges
+            for entry in recent_history:
+                history_text += f"User: {entry['question']}\nAssistant: {entry['answer']}\n\n"
+        
+        # Create prompt
+        prompt = self._create_prompt(query, context_text, history_text)
+        
+        # Generate with LLM
+        if self.llm_client:
+            try:
+                response = self.llm_client.chat.completions.create(
+                    model=self.llm_model,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that answers questions based on provided document context. Always cite the section name when referencing information."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=500
+                )
+                answer = response.choices[0].message.content.strip()
+            except Exception as e:
+                print(f"⚠️  LLM error: {e}")
+                answer = self._extractive_answer(query, contexts)
+        else:
+            answer = self._extractive_answer(query, contexts)
+        
+        return {
+            'answer': answer,
+            'sources': contexts,
+            'fallback': False
+        }
     
-    def _create_prompt(self, question: str, context: str, history: List = None) -> str:
-        """Create a prompt for the LLM"""
-        prompt = f"""<s>[INST] You are a helpful AI assistant that answers questions based on the provided context.
+    def _create_prompt(self, query: str, context: str, history: str) -> str:
+        """Create prompt for LLM"""
+        prompt = f"""Based on the following document context, answer the user's question accurately and concisely.
 
-Context information:
-{context}
+IMPORTANT RULES:
+1. Only use information from the provided context
+2. Always cite the section name when referencing information (e.g., "According to Section X...")
+3. If the answer isn't in the context, say "This information is not available in the document"
+4. Be direct and concise (2-3 sentences max)
+5. Use previous conversation for context if relevant
 
-Question: {question}
+Document Context:
+{context[:2000]}
 
-Please provide a clear and concise answer based on the context above. If the answer is not in the context, say so. [/INST]</s>"""
+"""
+        
+        if history:
+            prompt += f"Previous Conversation:\n{history}\n\n"
+        
+        prompt += f"User Question: {query}\n\nAnswer:"
         
         return prompt
     
-    def _extractive_answer(self, question: str, context: str) -> str:
-        """Fallback extractive answer when LLM fails"""
-        try:
-            # Simple extractive approach: return relevant context
-            sentences = context.replace('\n', '. ').split('.')
-            sentences = [s.strip() for s in sentences if s.strip()]
-            
-            question_words = set(question.lower().split())
-            
-            # Score sentences by relevance
-            scored = []
+    def _extractive_answer(self, query: str, contexts: List[Dict]) -> str:
+        """Fallback extractive answer"""
+        # Find most relevant sentences
+        query_words = set(query.lower().split())
+        
+        best_sentences = []
+        for ctx in contexts:
+            sentences = ctx['text'].split('. ')
             for sent in sentences:
-                if len(sent) < 10:  # Skip very short sentences
-                    continue
                 sent_words = set(sent.lower().split())
-                score = len(question_words & sent_words)
-                if score > 0:
-                    scored.append((score, sent))
+                overlap = len(query_words & sent_words)
+                if overlap > 2:
+                    best_sentences.append((overlap, sent, ctx['section']))
+        
+        best_sentences.sort(reverse=True)
+        
+        if best_sentences:
+            answer = f"According to {best_sentences[0][2]}: {best_sentences[0][1]}"
+            if len(best_sentences) > 1:
+                answer += f". Also, from {best_sentences[1][2]}: {best_sentences[1][1]}"
+            return answer
+        
+        return "I found relevant sections but couldn't extract a specific answer. Could you rephrase your question?"
+    
+    def query(self, question: str) -> Dict:
+        """Main query method"""
+        try:
+            if not self.current_doc:
+                return {
+                    'answer': 'Please upload a Google Doc first.',
+                    'sources': [],
+                    'error': True
+                }
             
-            scored.sort(reverse=True)
+            print(f"\n🔍 Query: {question}")
             
-            if scored:
-                # Return top 2-3 most relevant sentences
-                answer_sentences = [s[1] for s in scored[:3]]
-                return ". ".join(answer_sentences) + "."
-            else:
-                # If no match, return beginning of context
-                return " ".join(sentences[:2]) + "..."
-                
+            # Retrieve relevant contexts
+            contexts = self.retrieve_context(question)
+            print(f"📚 Retrieved {len(contexts)} relevant chunks")
+            
+            # Generate answer
+            result = self.generate_answer(question, contexts)
+            
+            # Store in history
+            self.conversation_history.append({
+                'question': question,
+                'answer': result['answer'],
+                'sources': [ctx['section'] for ctx in contexts]
+            })
+            
+            print(f"✅ Answer generated\n")
+            
+            return result
+        
         except Exception as e:
-            print(f"⚠️  Error in extractive answer: {e}")
-            return "I found relevant context but couldn't generate a specific answer. Please rephrase your question."
+            print(f"❌ Query error: {e}")
+            return {
+                'answer': f'Error processing query: {str(e)}',
+                'sources': [],
+                'error': True
+            }
     
-    def clear_documents(self):
-        """Clear all documents from the system"""
-        self.vectorstore = None
-        self.documents = []
-        self.document_metadata = []
-        print("🗑️  All documents cleared")
-    
-    def get_document_list(self) -> List[dict]:
-        """Get list of uploaded documents"""
-        return self.document_metadata
+    def clear(self):
+        """Clear current document and history"""
+        self.current_doc = None
+        self.conversation_history = []
+        if self.collection:
+            try:
+                self.chroma_client.delete_collection('documents')
+                self.collection = None
+            except:
+                pass
+        print("🗑️  Cleared document and history")

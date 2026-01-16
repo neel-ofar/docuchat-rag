@@ -1,0 +1,12 @@
+Artificial Intelligence Overview
+
+Artificial Intelligence (AI) is the simulation of human intelligence by machines.
+Machine Learning is a subset of AI that enables computers to learn from data.
+Deep Learning uses neural networks with multiple layers for complex tasks.
+Natural Language Processing helps computers understand human language.
+
+Python is the most popular programming language for AI development because of 
+its simplicity and powerful libraries like TensorFlow and PyTorch.
+
+Applications of AI include healthcare diagnosis, autonomous vehicles, 
+recommendation systems, and chatbots.

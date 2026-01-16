@@ -1,29 +1,31 @@
+# Web Framework
 flask
 flask-cors
-python-dotenv
-werkzeug
+gunicorn
 
-# LangChain and text processing
-langchain
-langchain-community
-langchain-text-splitters
+# Google Docs API
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
 
-# Embeddings and models (without torch dependency issues)
+# Document Processing
+beautifulsoup4
+lxml
+
+# Vector Store and Embeddings
+chromadb
 sentence-transformers
-huggingface-hub
 
-# Vector store
-faiss-cpu
+# LLM Integration
+groq
+openai
 
-# Document processing
-PyPDF2
-python-docx
+# Utilities
+python-dotenv
+requests
+tiktoken
 
-# Use CPU-only torch to avoid DLL issues on Windows
+# Minimal PyTorch for embeddings (CPU only)
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
-torchaudio
-torchvision
-
-# Production server
-gunicorn

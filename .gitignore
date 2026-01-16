@@ -4,41 +4,20 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
 venv/
 ENV/
 env/
 
-# Environment Variables
+# Environment
 .env
 .env.local
-
-# Uploads
-uploads/*
-!uploads/.gitkeep
+.env.production
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
@@ -47,13 +26,10 @@ Thumbs.db
 # Logs
 *.log
 
-# Database
-*.db
+# ChromaDB
+chroma/
 *.sqlite3
 
-# FAISS Index Files
-*.faiss
-*.pkl
-
-# Docker
-*.env.production
+# Cache
+.cache/
+*.cache
