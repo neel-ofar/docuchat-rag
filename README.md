@@ -3,8 +3,6 @@
 An intelligent RAG-powered chatbot that reads Google Docs and answers questions with accurate, cited responses.
 
 ## 🌐 Live Demo
-
-<<<<<<< HEAD
 🔗 **[Try it live on Render](https://docuchat-rag.onrender.com/)** 
 =======
 **🔗 https://docuchat-rag.onrender.com/** 
@@ -198,8 +196,6 @@ MIT License - feel free to use for commercial projects
 - Flask for the web framework
 
 ---
-
-<<<<<<< HEAD
 **⭐ If you find this project helpful, please give it a star!**
 =======
 **⭐ If you find this helpful, please star the repository!**
